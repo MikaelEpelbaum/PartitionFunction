@@ -49,51 +49,27 @@ The heuristic used to remove RVs from the junction tree is: repeatedly remove th
 the largest number of bags in the junction tree.
 """
 def getCutset(jt, threshold):
-    # todo: when I remove a variable from the nodes if a node didn't have the variable at first I completely loose it. is't wrong the node should continue to exist
     X = []
     JT = copy.deepcopy(jt)
-    current_largest_node_size = max([len(list(clique)) for clique in JT.nodes()])
-    while current_largest_node_size >= threshold:
-        print(JT.nodes)
-        G = nx.Graph()
-        G.add_nodes_from(JT.nodes)
-        G.add_edges_from(JT.edges)
-        # finding variable that appear the most in the nodes (cliques)
-        merged = list(itertools.chain(*JT.nodes()))
+    merged = list(itertools.chain(*[node.variables for node in JT.factors]))
+    variables_appearences = dict(Counter(merged))
+    most_occurent_variable = sorted(variables_appearences.items(), key=lambda item: item[1], reverse=True)[0][0]
+    while variables_appearences[most_occurent_variable] >= threshold:
+        X.append(most_occurent_variable)
+        for node in JT.factors:
+            if most_occurent_variable in node.variables:
+                node.variables.remove(most_occurent_variable)
+        merged = list(itertools.chain(*[node.variables for node in JT.factors]))
         variables_appearences = dict(Counter(merged))
         most_occurent_variable = sorted(variables_appearences.items(), key=lambda item: item[1], reverse=True)[0][0]
-        print(most_occurent_variable, variables_appearences[most_occurent_variable])
-        # most_occurent_variable1 = max(variables_appearences.items(), key=operator.itemgetter(1))[0]
-        X.append(most_occurent_variable)
-
-        # remove from nodes the most_occurent_variable
-        new_adjacent_dic = {}
-        # building new adjacency list of JT without X.
-        for node in JT.nodes:
-            if most_occurent_variable in node:
-                new_node = tuple(item for item in node if item != most_occurent_variable)
-                # new_JT.add_node(new_node)
-                for neighbor in JT.adj[node]:
-                    lst = list(neighbor)
-                    if most_occurent_variable in lst:
-                        lst.remove(most_occurent_variable)
-                    lst = tuple(lst)
-                    if new_node not in new_adjacent_dic:
-                        new_adjacent_dic[new_node] = [lst]
-                    else:
-                        new_adjacent_dic[new_node].append(lst)
-        # creating new JT based on previous one
-        JT = JunctionTree()
-        for node in new_adjacent_dic:
-            JT.add_node(node)
-        # Add edges to new_JT
-        for node, neighbors in new_adjacent_dic.items():
-            for neighbor in neighbors:
-                if (neighbor, node) not in JT.edges and set(neighbor).intersection(set(node)):
-                    JT.add_edge(node, neighbor)
-
-        current_largest_node_size = max([len(list(clique)) for clique in JT.nodes()])
     return X
+
+def generate_sample(X, N):
+    samples = [0] * len(X)
+    for i in range(N):
+        p = random.random()
+        samples[math.floor(p * len(X))] += 1
+    return [sample / N for sample in samples]
 
 
 """
@@ -140,11 +116,12 @@ def computePartitionFunction(markovNetwork, w, N):
     """
     Z = 0
     T = MarkovNetwork.to_junction_tree(MN)
-    x = getCutset(T, w)
+    X = getCutset(T, w)
+    print(X)
+    x = generate_sample(X, N)
     print(x)
-    print("s")
 
-        
+
 
 """This function implements the experiments where the sampling distribution is Q^{RB}"""
 def ExperimentsDistributionQRB(path= GRID_file):
