@@ -3,7 +3,6 @@
 # Press Shift+F10 to execute it or replace it with your code.
 # Press Double Shift to search everywhere for classes, files, tool windows, actions, and settings.
 from pgmpy.inference import BeliefPropagation
-import numpy as np
 from pgmpy.readwrite import UAIReader
 from pgmpy.factors import factor_product
 import random
@@ -71,26 +70,34 @@ def getCutset(jt, threshold):
     merged = list(itertools.chain(*[node.variables for node in JT.factors]))
     variables_appearences = dict(sorted(dict(Counter(merged)).items(), key=lambda item: item[1], reverse=True))
     most_occurent_variable = sorted(variables_appearences.items(), key=lambda item: item[1], reverse=True)[0][0]
+
     while variables_appearences[most_occurent_variable] >= threshold:
         X.append(most_occurent_variable)
         # removing edges which contain the the most frequent variable (the variable is present in both nodes that are connected to the edge.
         old_edges, new_edges = [], []
         for edge in JT.edges:
-            if most_occurent_variable in edge[0] and most_occurent_variable in edge[1]:
+            if most_occurent_variable in edge[0] or most_occurent_variable in edge[1]:
                 old_edges.append(edge)
                 cleaned_edge = (tuple(var for var in edge[0] if var != most_occurent_variable), tuple(var for var in edge[1] if var != most_occurent_variable))
                 if set(cleaned_edge[0]).intersection(cleaned_edge[1]):
                     new_edges.append(cleaned_edge)
 
         JT.remove_edges_from(old_edges)
+        # --------- ca me rajoute les nodes des edge que jai rajouter un surplus
         JT.add_edges_from(new_edges)
 
         # removing the most frequent var from the clique nodes that hold it (factors).
-        for node in JT.factors:
-            if most_occurent_variable in node.variables:
-                node.variables.remove(most_occurent_variable)
-        merged = list(itertools.chain(*[node.variables for node in JT.factors]))
-        variables_appearences = dict(sorted(dict(Counter(merged)).items(), key=lambda item: item[1], reverse=True))
+        nodes_to_remove = []
+        new_nodes = []
+        for node in JT.nodes:
+            if most_occurent_variable in node:
+                nodes_to_remove.append(node)
+                new_nodes.append(tuple(var for var in node if var != most_occurent_variable))
+
+        JT.remove_nodes_from(nodes_to_remove)
+        JT.add_nodes_from(new_nodes)
+
+        variables_appearences.pop(most_occurent_variable)
         most_occurent_variable = sorted(variables_appearences.items(), key=lambda item: item[1], reverse=True)[0][0]
     return X, JT
 
@@ -129,7 +136,6 @@ def computePartitionFunctionWithEvidence(jt, model, evidence):
     return marg_prod.values
 
 
-from pgmpy.factors.discrete import TabularCPD
 """This function implements the ComputePartitionFunction algorithm using the wCutset and GenerateSample functions"""
 def computePartitionFunction(markovNetwork, w, N, distribution="QRB"):
     """
@@ -150,51 +156,31 @@ def computePartitionFunction(markovNetwork, w, N, distribution="QRB"):
     Z = 0
     # wCutset
     T = MarkovNetwork.to_junction_tree(MN)
-    T_oren = copy.deepcopy(T)
+    original_T = copy.deepcopy(T)
     X, T = getCutset(T, w)
-    X_oren, T_oren = getCutsetOren(T_oren, w)
 
     # Q
     Q = []
     if distribution == "uniform":
         Q = 1/2**len(X)
+
+        # generate sample
+        for i in range(N):
+            x = generate_sample(X)
+            part_x = computePartitionFunctionWithEvidence(T, MN, x)
+            t_x = part_x / Q
+            Z = Z + t_x
     elif distribution == "QRB":
-        # BM = MarkovNetwork.to_bayesian_model(markovNetwork)
-        #
-        # # Get the factors from the Markov network
-        # factors = markovNetwork.factors
-        #
-        # # Iterate over the factors
-        # for factor in factors:
-        #     # Get the variables and their cardinalities from the factor
-        #     variables = factor.scope()
-        #
-        #     # Reshape the factor values to match the CPD shape
-        #     values = factor.values
-        #     if list(np.shape(factor.values)) == [2]:
-        #         factor.values.reshape(-1)
-        #
-        #     # Create a CPD for the factor's variables in the BayesianModel
-        #     cpd = TabularCPD(variables[0], 2, values) #evidence=variables[1:], evidence_card=[v for v in variables[1:]])
-        #
-        #     # Add CPD to the BayesianModel
-        #     BM.add_cpds(cpd)
-        #
-        # belief_propagation = BeliefPropagation(BM)
-        # evidence = generate_sample(X)
-        evidence = generate_sample(X)
-        belief_propagation = BeliefPropagation(markovNetwork)
-        v = belief_propagation.query(variables=list(set(markovNetwork.nodes) - set(evidence.keys())), evidence=evidence)
+        belief_propagation = BeliefPropagation(original_T)
+        Q = belief_propagation.query(X)
 
-        print(v)
+        # generate sample
+        for i in range(N):
+            x = generate_sample(X)
+            part_x = computePartitionFunctionWithEvidence(original_T, MN, x)
+            t_x = part_x / Q.get_value(**x)
+            Z = Z + t_x
 
-
-    # generate sample
-    for i in range(N):
-        x = generate_sample(X)
-        part_x = computePartitionFunctionWithEvidence(T, MN, x)
-        t_x = part_x/Q
-        Z = Z + t_x
     return Z/N
 
 
@@ -206,10 +192,6 @@ def ExperimentsDistributionQRB(path= GRID_file):
 """This function implements the experiments where the sampling distribution Q is uniform"""
 def ExperimentsDistributionQUniform(path= GRID_file):
     pass
-
-
-
-
 
 
 # Press the green button in the gutter to run the script.
@@ -235,11 +217,11 @@ if __name__ == '__main__':
     MN = reader.get_model()
     JT = MarkovNetwork.to_junction_tree(MN)
     w = max([len(list(clique)) for clique in JT.nodes()])
-    partitionFunctionResult = computePartitionFunction(MN, 5, 50, "uniform")
+    partitionFunctionResult_uniform = computePartitionFunction(MN, 5, 50, "uniform")
 
     """Part 1.2"""
-    partitionFunctionResult = computePartitionFunction(MN, 5, 50)
-    print(partitionFunctionResult)
+    partitionFunctionResult_QRB = computePartitionFunction(MN, 5, 50)
+    print(partitionFunctionResult_QRB)
     """Part 2"""
     #print("grid4x4 Experiments:")
     ExperimentsDistributionQRB(GRID_file)
