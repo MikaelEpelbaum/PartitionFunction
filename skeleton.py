@@ -12,7 +12,6 @@ from statistics import mean, stdev
 
 from pgmpy.models.MarkovNetwork import MarkovNetwork
 import itertools
-from collections import Counter
 import copy
 import pandas as pd
 
@@ -172,13 +171,21 @@ def computePartitionFunction(MN, w, N, distribution="QRB"):
             Z = Z + t_x
     elif distribution == "QRB":
         belief_propagation = BeliefPropagation(original_T)
+
         Q = belief_propagation.query(X)
+        permutations = list(itertools.product([0, 1], repeat=len(X)))
+        binary_permutations = [{X[i]: perm[i] for i in range(len(X))} for perm in permutations]
+
+        Q_probas = {}
+        for perm in binary_permutations:
+            Q_probas[tuple(perm.items())] = Q.get_value(**perm)
+
         for i in range(N):
             x = generate_sample(X)
             part_x = computePartitionFunctionWithEvidence(original_T, MN, x)
-            t_x = part_x / Q.get_value(**x)
+            t_x = part_x / Q_probas[tuple(x.items())]
             Z = Z + t_x
-    return Z/N
+    return Z / N
 
 
 
@@ -258,7 +265,7 @@ def ExperimentsDistributionQUniform(path= GRID_file):
                 "Time": (Time_avg + Time_std, Time_avg - Time_std),
                 "Error": (E_avr + E_std, E_avr - E_std)
             }
-            df.to_csv('cur_df.csv')
+            df.to_csv('cur_df_uniform.csv')
     return df
 
 
@@ -274,16 +281,16 @@ if __name__ == '__main__':
     """Part 1.1"""
     reader = UAIReader(GRID_file)
     MN = reader.get_model()
-    # JT = MarkovNetwork.to_junction_tree(MN)
-    # w = max([len(list(clique)) for clique in JT.nodes()])
-    # partitionFunctionResult_uniform = computePartitionFunction(MN, 5, 50, "uniform")
+    JT = MarkovNetwork.to_junction_tree(MN)
+    w = max([len(list(clique)) for clique in JT.nodes()])
+    partitionFunctionResult_uniform = computePartitionFunction(MN, 5, 50, "uniform")
 
-    # """Part 2"""
-    # partitionFunctionResult_QRB = computePartitionFunction(MN, 5, 50)
-    # print(partitionFunctionResult_QRB)
 
-    # """Part 3"""
-    # print("grid4x4 Experiments:")
+    """Part 2"""
+    partitionFunctionResult_QRB = computePartitionFunction(MN, 5, 50)
 
+
+    """Part 3"""
+    print("grid4x4 Experiments:")
+    ExperimentsDistributionQUniform(GRID_file)
     ExperimentsDistributionQRB(GRID_file)
-    # ExperimentsDistributionQUniform(GRID_file)
