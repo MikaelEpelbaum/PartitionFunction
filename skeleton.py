@@ -2,21 +2,19 @@
 
 # Press Shift+F10 to execute it or replace it with your code.
 # Press Double Shift to search everywhere for classes, files, tool windows, actions, and settings.
-from pgmpy.inference import BeliefPropagation
+from pgmpy.inference import BeliefPropagation, VariableElimination
 from pgmpy.readwrite import UAIReader
 from pgmpy.factors import factor_product
 import random
 import time
 import math
+from statistics import mean, stdev
 
 from pgmpy.models.MarkovNetwork import MarkovNetwork
 import itertools
 from collections import Counter
 import copy
-import matplotlib.pyplot as plt
-import networkx as nx
-import operator
-from pgmpy.models import JunctionTree
+import pandas as pd
 
 GRID_file = "./grid4x4.uai"
 
@@ -67,11 +65,12 @@ def getCutset(jt, threshold):
     """
     X = []
     JT = copy.deepcopy(jt)
-    merged = list(itertools.chain(*[node.variables for node in JT.factors]))
-    variables_appearences = dict(sorted(dict(Counter(merged)).items(), key=lambda item: item[1], reverse=True))
-    most_occurent_variable = sorted(variables_appearences.items(), key=lambda item: item[1], reverse=True)[0][0]
+    variables_appearences = numberOfScopesPerVariable(JT.nodes)
+    most_occurent_variable = variables_appearences.pop(0)[0]
+    largest_cluster_size = max([len(item[0]) for item in JT.nodes.items()])
+    bool = True
 
-    while variables_appearences[most_occurent_variable] >= threshold:
+    while largest_cluster_size >= threshold or bool:
         X.append(most_occurent_variable)
         # removing edges which contain the the most frequent variable (the variable is present in both nodes that are connected to the edge.
         old_edges, new_edges = [], []
@@ -79,7 +78,7 @@ def getCutset(jt, threshold):
             if most_occurent_variable in edge[0] or most_occurent_variable in edge[1]:
                 old_edges.append(edge)
                 cleaned_edge = (tuple(var for var in edge[0] if var != most_occurent_variable), tuple(var for var in edge[1] if var != most_occurent_variable))
-                if set(cleaned_edge[0]).intersection(cleaned_edge[1]):
+                if set(cleaned_edge[0]).intersection(cleaned_edge[1]) and cleaned_edge[0] != cleaned_edge[1]:
                     new_edges.append(cleaned_edge)
 
         JT.remove_edges_from(old_edges)
@@ -93,17 +92,18 @@ def getCutset(jt, threshold):
             if most_occurent_variable in node:
                 nodes_to_remove.append(node)
                 new_nodes.append(tuple(var for var in node if var != most_occurent_variable))
-
         JT.remove_nodes_from(nodes_to_remove)
         JT.add_nodes_from(new_nodes)
 
-        variables_appearences.pop(most_occurent_variable)
-        most_occurent_variable = sorted(variables_appearences.items(), key=lambda item: item[1], reverse=True)[0][0]
+        if len(variables_appearences) == 0:
+            bool = False
+        if len(variables_appearences) > 0:
+            most_occurent_variable = variables_appearences.pop(0)[0]
+        largest_cluster_size = max([len(item[0]) for item in JT.nodes.items()])
     return X, JT
 
 
 def generate_sample(X):
-    print('a')
     temp = [random.randint(0, 1) for i in range(len(X))]
     x = {X[i] : temp[i] for i in range(len(X))}
     return x
@@ -122,7 +122,7 @@ def computePartitionFunctionWithEvidence(jt, model, evidence):
                 evidence_vars.append(var)
         if evidence_vars:
             reduce_vars = [(var, evidence[var]) for var in evidence_vars]
-            new_factor= factor.reduce(reduce_vars, inplace=False)
+            new_factor = factor.reduce(reduce_vars, inplace=False)
             reducedFactors.append(new_factor)
         else:
             reducedFactors.append(factor.copy())
@@ -137,7 +137,7 @@ def computePartitionFunctionWithEvidence(jt, model, evidence):
 
 
 """This function implements the ComputePartitionFunction algorithm using the wCutset and GenerateSample functions"""
-def computePartitionFunction(markovNetwork, w, N, distribution="QRB"):
+def computePartitionFunction(MN, w, N, distribution="QRB"):
     """
             implements Algorithm ComputePartitionFunction.
 
@@ -173,60 +173,117 @@ def computePartitionFunction(markovNetwork, w, N, distribution="QRB"):
     elif distribution == "QRB":
         belief_propagation = BeliefPropagation(original_T)
         Q = belief_propagation.query(X)
-
-        # generate sample
         for i in range(N):
             x = generate_sample(X)
             part_x = computePartitionFunctionWithEvidence(original_T, MN, x)
             t_x = part_x / Q.get_value(**x)
             Z = Z + t_x
-
     return Z/N
 
 
 
 """This function implements the experiments where the sampling distribution is Q^{RB}"""
 def ExperimentsDistributionQRB(path= GRID_file):
-    pass
+    df = pd.DataFrame(columns=[50, 100, 1000, 5000], index=[1, 2, 3, 4, 5])
+    reader = UAIReader(GRID_file)
+    MN = reader.get_model()
+
+    for N in [50, 100, 1000, 5000]:
+        for w in [5, 4, 3, 2, 1]:
+            E_values = []
+            Time_values = []
+
+            random.seed(random.random())
+            jt = MarkovNetwork.to_junction_tree(MN)
+            X, jt = getCutset(jt, w)
+            inference = VariableElimination(MN)
+            query = inference.query(X)
+            Real_Z = query.values.sum()
+
+
+            for i in range(10):
+                start_time = time.time()
+                cur_Z_uni = computePartitionFunction(MN, w, N, distribution="QRB")
+                end_time = time.time()
+                delta = end_time - start_time
+                Time_values.append(delta)
+
+                E_values.append(abs(math.log(cur_Z_uni) - math.log(Real_Z)) / math.log(Real_Z))
+
+            E_avr = mean(E_values)
+            E_std = stdev(E_values)
+            Time_avg = mean(Time_values)
+            Time_std = stdev(Time_values)
+
+            df.loc[w][N] = {
+                "Time": (Time_avg + Time_std, Time_avg - Time_std),
+                "Error": (E_avr + E_std, E_avr - E_std)
+            }
+            df.to_csv('cur_df_QRB.csv')
 
 """This function implements the experiments where the sampling distribution Q is uniform"""
 def ExperimentsDistributionQUniform(path= GRID_file):
-    pass
+    df = pd.DataFrame(columns=[50, 100, 1000, 5000], index=[1, 2, 3, 4, 5])
+    reader = UAIReader(GRID_file)
+    MN = reader.get_model()
+
+    for N in [50, 100, 1000, 5000]:
+        for w in [5, 4, 3, 2, 1]:
+            E_values = []
+            Time_values = []
+
+            random.seed(random.random())
+            jt = MarkovNetwork.to_junction_tree(MN)
+            X, jt = getCutset(jt, w)
+            inference = VariableElimination(MN)
+            query = inference.query(X)
+            Real_Z = query.values.sum()
+
+            for i in range(10):
+                start_time = time.time()
+                cur_Z_uni = computePartitionFunction(MN, w, N, distribution="uniform")
+                end_time = time.time()
+                delta = end_time-start_time
+                Time_values.append(delta)
+
+                E_values.append(abs(math.log(cur_Z_uni)-math.log(Real_Z))/math.log(Real_Z))
+
+
+            E_avr = mean(E_values)
+            E_std = stdev(E_values)
+            Time_avg = mean(Time_values)
+            Time_std = stdev(Time_values)
+
+            df.loc[w][N] = {
+                "Time": (Time_avg + Time_std, Time_avg - Time_std),
+                "Error": (E_avr + E_std, E_avr - E_std)
+            }
+            df.to_csv('cur_df.csv')
+    return df
+
+
+
+
+
+
 
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
-    # from pgmpy.factors.discrete import TabularCPD
-    # from pgmpy.models import BayesianNetwork
-    # from pgmpy.inference import BeliefPropagation
-    # bayesian_model = BayesianNetwork([('A', 'J'), ('R', 'J'), ('J', 'Q'), ('J', 'L'), ('G', 'L')])
-    # cpd_a = TabularCPD('A', 2, [[0.2], [0.8]])
-    # cpd_r = TabularCPD('R', 2, [[0.4], [0.6]])
-    # cpd_j = TabularCPD('J', 2, [[0.9, 0.6, 0.7, 0.1], [0.1, 0.4, 0.3, 0.9]], ['R', 'A'], [2, 2])
-    # cpd_q = TabularCPD('Q', 2, [[0.9, 0.2], [0.1, 0.8]], ['J'], [2])
-    # cpd_l = TabularCPD('L', 2, [[0.9, 0.45, 0.8, 0.1], [0.1, 0.55, 0.2, 0.9]], ['G', 'J'], [2, 2])
-    # cpd_g = TabularCPD('G', 2, [[0.6], [0.4]])
-    # bayesian_model.add_cpds(cpd_a, cpd_r, cpd_j, cpd_q, cpd_l, cpd_g)
-    # belief_propagation = BeliefPropagation(bayesian_model)
-    # v = belief_propagation.query(variables=['J', 'Q'], evidence = {'A': 0, 'R': 0, 'G': 0, 'L': 1})
-    # print(v)
-
 
     """Part 1.1"""
     reader = UAIReader(GRID_file)
     MN = reader.get_model()
-    JT = MarkovNetwork.to_junction_tree(MN)
-    w = max([len(list(clique)) for clique in JT.nodes()])
-    partitionFunctionResult_uniform = computePartitionFunction(MN, 5, 50, "uniform")
+    # JT = MarkovNetwork.to_junction_tree(MN)
+    # w = max([len(list(clique)) for clique in JT.nodes()])
+    # partitionFunctionResult_uniform = computePartitionFunction(MN, 5, 50, "uniform")
 
-    """Part 1.2"""
-    partitionFunctionResult_QRB = computePartitionFunction(MN, 5, 50)
-    print(partitionFunctionResult_QRB)
-    """Part 2"""
-    #print("grid4x4 Experiments:")
+    # """Part 2"""
+    # partitionFunctionResult_QRB = computePartitionFunction(MN, 5, 50)
+    # print(partitionFunctionResult_QRB)
+
+    # """Part 3"""
+    # print("grid4x4 Experiments:")
+
     ExperimentsDistributionQRB(GRID_file)
-    ExperimentsDistributionQUniform(GRID_file)
-
-
-
-# See PyCharm help at https://www.jetbrains.com/help/pycharm/
+    # ExperimentsDistributionQUniform(GRID_file)
